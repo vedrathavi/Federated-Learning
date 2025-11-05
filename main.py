@@ -31,13 +31,15 @@ def main():
             tqdm.write(f"Client {i+1} training (round {rnd+1})...")
             state_dict, history = train_local(global_model, loader, device, val_loader=val_loader, epochs=epochs_per_client, client_id=i+1)
             local_weights.append(state_dict)
+            
+            
+        # aggregate and update global model using simple FedAvg (per round)
+        global_model = fed_avg(global_model, local_weights)
 
-    # aggregate and update global model using simple FedAvg
-    global_model = fed_avg(global_model, local_weights)
+        # quick evaluation on test set after this round
+        acc, prec, rec, f1 = evaluate(global_model, DataLoader(testset, batch_size=16), device)
+        tqdm.write(f"After round {rnd+1} test -> acc: {acc:.4f}, prec: {prec:.4f}, rec: {rec:.4f}, f1: {f1:.4f}")
 
-    # quick evaluation on test set after this round
-    acc, prec, rec, f1 = evaluate(global_model, DataLoader(testset, batch_size=16), device)
-    tqdm.write(f"After round {rnd+1} test -> acc: {acc:.4f}, prec: {prec:.4f}, rec: {rec:.4f}, f1: {f1:.4f}")
 
     # Final evaluation after all rounds
     tqdm.write("\n=== Final evaluation on test set ===")

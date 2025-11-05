@@ -1,1 +1,15 @@
-tqdm
+﻿# Core Python dependencies for this project.
+# Note: For PyTorch it's recommended to pick the official wheel for your OS/CUDA
+# from https://pytorch.org/; the plain pip install torch will usually install
+# a CPU build if no CUDA wheel is available for your platform.
+
+
+
+
+
+torch>=2.0.0
+torchvision>=0.15.0
+scikit-learn>=1.2.2
+tqdm>=4.65.0
+numpy>=1.23.0
+Pillow>=9.0.0
