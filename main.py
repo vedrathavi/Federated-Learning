@@ -3,7 +3,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from models.cnn_model import SimpleCNN
-from utils.data_utils import load_datasets, split_clients, get_client_loaders
+from utils.data_utils import load_datasets, split_clients, get_client_loaders,set_seed
 from utils.train_utils import train_local
 from utils.fed_avg import fed_avg
 from utils.metrics_utils import evaluate
@@ -12,6 +12,7 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Using:", device)
 
+    set_seed(42)
     dataset, valset, testset = load_datasets("dataset")
     client_datasets = split_clients(dataset)
     client_loaders = get_client_loaders(client_datasets, num_workers=0)
