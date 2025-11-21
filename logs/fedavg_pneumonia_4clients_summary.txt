@@ -1,0 +1,50 @@
+================================================================================
+FEDERATED LEARNING EXPERIMENT REPORT
+Experiment: fedavg_pneumonia_4clients
+Timestamp: 2025-11-21T20:37:08.590833
+================================================================================
+
+CONFIGURATION:
+--------------------------------------------------------------------------------
+device: cpu
+seed: 42
+num_clients: 4
+rounds: 30
+epochs_per_client: 2
+batch_size: 16
+model: SimpleCNN
+aggregation: FedAvg
+dataset: Pneumonia X-Ray
+
+FINAL GLOBAL MODEL PERFORMANCE:
+--------------------------------------------------------------------------------
+accuracy: 0.674227
+precision: 0.614815
+recall: 0.992032
+f1_score: 0.759146
+auc_roc: 0.727245
+
+BEST ACCURACY: 0.738144 (achieved at round 10)
+
+PER-CLIENT PERFORMANCE (Final Round):
+--------------------------------------------------------------------------------
+Mean Accuracy: 1.000000
+Std Deviation: 0.000000
+Variance: 0.000000
+Min Accuracy: 1.000000
+Max Accuracy: 1.000000
+
+Individual Client Results:
+  Client 1: acc=1.0000, f1=1.0000, auc=1.0000
+  Client 2: acc=1.0000, f1=1.0000, auc=1.0000
+  Client 3: acc=1.0000, f1=1.0000, auc=1.0000
+  Client 4: acc=1.0000, f1=1.0000, auc=1.0000
+
+COMMUNICATION OVERHEAD:
+--------------------------------------------------------------------------------
+Total Rounds: 30
+Total Data Transfer: 11764.75 MB (11.4890 GB)
+Avg per Round: 392.16 MB
+
+================================================================================
+Report generation complete.

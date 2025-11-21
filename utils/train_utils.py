@@ -107,7 +107,3 @@ def train_local(model: nn.Module,
                 tqdm.write(prefix + f"Epoch {epoch}: train_loss={train_loss:.4f}, train_acc={train_acc:.4f}")
 
     return local_model.state_dict(), history
-
-
-
-

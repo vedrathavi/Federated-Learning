@@ -3,13 +3,13 @@
 # from https://pytorch.org/; the plain pip install torch will usually install
 # a CPU build if no CUDA wheel is available for your platform.
 
-
-
-
-
 torch>=2.0.0
 torchvision>=0.15.0
 scikit-learn>=1.2.2
 tqdm>=4.65.0
 numpy>=1.23.0
 Pillow>=9.0.0
+
+# Visualization and plotting
+matplotlib>=3.5.0
+seaborn>=0.12.0

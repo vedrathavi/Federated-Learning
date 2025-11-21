@@ -1,0 +1,85 @@
+{
+    "experiment_name": "fedavg_pneumonia_4clients",
+    "timestamp": "2025-11-21T20:37:08.590833",
+    "config": {
+        "device": "cpu",
+        "seed": 42,
+        "num_clients": 4,
+        "rounds": 30,
+        "epochs_per_client": 2,
+        "batch_size": 16,
+        "model": "SimpleCNN",
+        "aggregation": "FedAvg",
+        "dataset": "Pneumonia X-Ray"
+    },
+    "summary": {
+        "final_global_metrics": {
+            "round": 30,
+            "accuracy": 0.6742268041237114,
+            "precision": 0.6148148148148148,
+            "recall": 0.9920318725099602,
+            "f1_score": 0.7591463414634146,
+            "auc_roc": 0.7272448666870978
+        },
+        "best_accuracy": {
+            "value": 0.7381443298969073,
+            "round": 10
+        },
+        "client_performance": {
+            "mean_accuracy": 1.0,
+            "variance_accuracy": 0.0,
+            "std_accuracy": 0.0,
+            "min_accuracy": 1.0,
+            "max_accuracy": 1.0,
+            "per_client": [
+                {
+                    "round": 30,
+                    "client_id": 1,
+                    "accuracy": 1.0,
+                    "precision": 1.0,
+                    "recall": 1.0,
+                    "f1_score": 1.0,
+                    "auc_roc": 1.0,
+                    "num_samples": 521
+                },
+                {
+                    "round": 30,
+                    "client_id": 2,
+                    "accuracy": 1.0,
+                    "precision": 1.0,
+                    "recall": 1.0,
+                    "f1_score": 1.0,
+                    "auc_roc": 1.0,
+                    "num_samples": 1304
+                },
+                {
+                    "round": 30,
+                    "client_id": 3,
+                    "accuracy": 1.0,
+                    "precision": 1.0,
+                    "recall": 1.0,
+                    "f1_score": 1.0,
+                    "auc_roc": 1.0,
+                    "num_samples": 1825
+                },
+                {
+                    "round": 30,
+                    "client_id": 4,
+                    "accuracy": 1.0,
+                    "precision": 1.0,
+                    "recall": 1.0,
+                    "f1_score": 1.0,
+                    "auc_roc": 1.0,
+                    "num_samples": 1566
+                }
+            ]
+        },
+        "communication": {
+            "total_bytes": 12336232320,
+            "total_mb": 11764.747924804688,
+            "total_gb": 11.489011645317078,
+            "avg_bytes_per_round": 411207744.0,
+            "total_rounds": 30
+        }
+    }
+}

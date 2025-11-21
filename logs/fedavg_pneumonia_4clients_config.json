@@ -1,0 +1,11 @@
+{
+    "device": "cpu",
+    "seed": 42,
+    "num_clients": 4,
+    "rounds": 30,
+    "epochs_per_client": 2,
+    "batch_size": 16,
+    "model": "SimpleCNN",
+    "aggregation": "FedAvg",
+    "dataset": "Pneumonia X-Ray"
+}

@@ -32,11 +32,29 @@ def load_datasets(data_dir):
 
 
 def split_clients(dataset, num_clients=4, seed=42):
+    """Split dataset into client datasets with different sizes.
+    
+    Args:
+        dataset: PyTorch dataset to split
+        num_clients: Number of clients (fixed)
+        seed: Random seed for reproducibility
+        
+    Returns:
+        List of client datasets
+    """
     total_len = len(dataset)
 
-    proportions = [0.1, 0.25, 0.35, 0.3]
+    # Default proportions for 4 clients (heterogeneous split)
+    # Client 1: 10%, Client 2: 25%, Client 3: 35%, Client 4: 30%
+    if num_clients == 4:
+        proportions = [0.1, 0.25, 0.35, 0.3]
+    else:
+        # Equal split for other numbers of clients
+        proportions = [1.0 / num_clients] * num_clients
+    
     sizes = [int(total_len * p) for p in proportions]
 
+    # Handle rounding errors
     diff = total_len - sum(sizes)
     sizes[-1] += diff
 
