@@ -82,6 +82,27 @@ def format_bytes(bytes_value: int) -> str:
     return f"{bytes_value:.2f} TB"
 
 
+def state_dict_l2_distance(sd_a: Dict, sd_b: Dict) -> float:
+    """Compute the L2 norm of the difference between two state_dict-like mappings.
+
+    Args:
+        sd_a: state dict A (mapping name->tensor)
+        sd_b: state dict B
+
+    Returns:
+        L2 norm (float) of flattened parameter differences.
+    """
+    total = 0.0
+    for k in sd_a.keys():
+        if k not in sd_b:
+            continue
+        a = sd_a[k].float()
+        b = sd_b[k].float()
+        diff = a - b
+        total += float((diff.view(-1) @ diff.view(-1)).sum())
+    return float(total ** 0.5)
+
+
 class CommunicationTracker:
     """Track communication costs across multiple rounds."""
     

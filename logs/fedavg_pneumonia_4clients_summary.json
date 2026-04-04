@@ -1,85 +1,86 @@
 {
     "experiment_name": "fedavg_pneumonia_4clients",
-    "timestamp": "2025-11-21T20:37:08.590833",
+    "timestamp": "2025-11-22T19:08:43.689990",
     "config": {
-        "device": "cpu",
+        "device": "cuda",
         "seed": 42,
         "num_clients": 4,
-        "rounds": 30,
+        "rounds": 10,
         "epochs_per_client": 2,
         "batch_size": 16,
-        "model": "SimpleCNN",
+        "learning_rate": 0.0001,
+        "model": "ResNet-18",
         "aggregation": "FedAvg",
         "dataset": "Pneumonia X-Ray"
     },
     "summary": {
         "final_global_metrics": {
-            "round": 30,
-            "accuracy": 0.6742268041237114,
-            "precision": 0.6148148148148148,
-            "recall": 0.9920318725099602,
-            "f1_score": 0.7591463414634146,
-            "auc_roc": 0.7272448666870978
+            "round": 10,
+            "accuracy": 0.6721649484536083,
+            "precision": 0.6121951219512195,
+            "recall": 1.0,
+            "f1_score": 0.7594553706505295,
+            "auc_roc": 0.9233578506486874
         },
         "best_accuracy": {
-            "value": 0.7381443298969073,
-            "round": 10
+            "value": 0.7670103092783506,
+            "round": 3
         },
         "client_performance": {
-            "mean_accuracy": 1.0,
-            "variance_accuracy": 0.0,
-            "std_accuracy": 0.0,
-            "min_accuracy": 1.0,
+            "mean_accuracy": 0.9997448979591836,
+            "variance_accuracy": 1.9523115368596882e-07,
+            "std_accuracy": 0.0004418496958083923,
+            "min_accuracy": 0.9989795918367347,
             "max_accuracy": 1.0,
             "per_client": [
                 {
-                    "round": 30,
+                    "round": 10,
                     "client_id": 1,
-                    "accuracy": 1.0,
+                    "accuracy": 0.9989795918367347,
                     "precision": 1.0,
-                    "recall": 1.0,
-                    "f1_score": 1.0,
+                    "recall": 0.9989743589743589,
+                    "f1_score": 0.9994869163673679,
                     "auc_roc": 1.0,
-                    "num_samples": 521
+                    "num_samples": 980
                 },
                 {
-                    "round": 30,
+                    "round": 10,
                     "client_id": 2,
                     "accuracy": 1.0,
                     "precision": 1.0,
                     "recall": 1.0,
                     "f1_score": 1.0,
                     "auc_roc": 1.0,
-                    "num_samples": 1304
+                    "num_samples": 1246
                 },
                 {
-                    "round": 30,
+                    "round": 10,
                     "client_id": 3,
                     "accuracy": 1.0,
                     "precision": 1.0,
                     "recall": 1.0,
                     "f1_score": 1.0,
                     "auc_roc": 1.0,
-                    "num_samples": 1825
+                    "num_samples": 856
                 },
                 {
-                    "round": 30,
+                    "round": 10,
                     "client_id": 4,
                     "accuracy": 1.0,
                     "precision": 1.0,
                     "recall": 1.0,
                     "f1_score": 1.0,
                     "auc_roc": 1.0,
-                    "num_samples": 1566
+                    "num_samples": 2134
                 }
             ]
         },
         "communication": {
-            "total_bytes": 12336232320,
-            "total_mb": 11764.747924804688,
-            "total_gb": 11.489011645317078,
-            "avg_bytes_per_round": 411207744.0,
-            "total_rounds": 30
+            "total_bytes": 3576812160,
+            "total_mb": 3411.1138916015625,
+            "total_gb": 3.331165909767151,
+            "avg_bytes_per_round": 357681216.0,
+            "total_rounds": 10
         }
     }
 }

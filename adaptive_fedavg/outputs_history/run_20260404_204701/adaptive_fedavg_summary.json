@@ -1,0 +1,32 @@
+{
+  "timestamp": "2026-04-04T20:10:01.808866",
+  "config": {
+    "data_dir": "D:\\federated learning\\dataset",
+    "num_clients": 4,
+    "num_rounds": 20,
+    "local_epochs": 5,
+    "local_batch_size": 8,
+    "lr": 0.0005,
+    "weight_decay": 0.0001,
+    "image_size": 224,
+    "seed": 42,
+    "device": "cuda",
+    "adaptive": {
+      "beta_size": 0.6,
+      "beta_perf": 0.4,
+      "perf_temperature": 5.0
+    },
+    "iid_split": true,
+    "fixed_clients": 4,
+    "model": "PneumoniaCNN (4 conv layers + batchnorm + adaptive avg pool)",
+    "augmentation": "flip + rotation10 + colorjitter"
+  },
+  "final_metrics": {
+    "accuracy": 0.845360824742268,
+    "f1": 0.8672566371681416,
+    "auc": 0.9520209759253585
+  },
+  "best_global_accuracy": 0.8845360824742268,
+  "best_global_f1": 0.8947368421052632,
+  "best_global_auc": 0.9520209759253585
+}

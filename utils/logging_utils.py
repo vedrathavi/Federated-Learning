@@ -13,6 +13,7 @@ import matplotlib
 matplotlib.use('Agg')  # Use non-interactive backend
 import seaborn as sns
 import numpy as np
+import torch
 
 # Set style for better-looking plots
 sns.set_style("whitegrid")
@@ -44,6 +45,7 @@ class ExperimentLogger:
         # Initialize storage
         self.global_metrics = []
         self.client_metrics = []
+        self.weight_drift = []
         self.communication_metrics = []
         self.config = {}
         
@@ -85,6 +87,13 @@ class ExperimentLogger:
         
         # Append to CSV
         csv_file = self.log_dir / f"{self.experiment_name}_client_metrics.csv"
+        self._append_to_csv(csv_file, entry)
+
+    def log_weight_drift(self, round_num: int, client_id: int, drift_value: float):
+        """Log per-client weight drift (L2 distance) for a round."""
+        entry = {'round': round_num, 'client_id': client_id, 'weight_drift': float(drift_value)}
+        self.weight_drift.append(entry)
+        csv_file = self.log_dir / f"{self.experiment_name}_weight_drift.csv"
         self._append_to_csv(csv_file, entry)
     
     def log_communication_metrics(self, round_num: int, metrics: Dict[str, Any]):
@@ -226,6 +235,69 @@ class ExperimentLogger:
             plt.tight_layout()
             plt.savefig(self.plots_dir / f"{self.experiment_name}_client_metrics_comparison.png", dpi=300)
             plt.close()
+
+    def plot_client_accuracy_over_rounds(self):
+        """Plot per-round client accuracy (each client is a line across rounds)."""
+        if not self.client_metrics:
+            return
+
+        # Gather rounds and client ids
+        rounds = sorted(list({m['round'] for m in self.client_metrics}))
+        client_ids = sorted(list({m['client_id'] for m in self.client_metrics}))
+
+        # Build mapping client_id -> {round: accuracy}
+        client_round_acc = {cid: {r: None for r in rounds} for cid in client_ids}
+        for entry in self.client_metrics:
+            cid = entry['client_id']
+            rnd = entry['round']
+            if 'accuracy' in entry:
+                client_round_acc[cid][rnd] = entry['accuracy']
+
+        plt.figure(figsize=(10, 6))
+        for cid in client_ids:
+            accs = [client_round_acc[cid].get(r, None) for r in rounds]
+            # Replace None with np.nan so matplotlib doesn't break lines
+            accs = [np.nan if v is None else v for v in accs]
+            plt.plot(rounds, accs, marker='o', linewidth=2, markersize=6, label=f'Client {cid}')
+
+        plt.xlabel('Communication Round', fontsize=12)
+        plt.ylabel('Accuracy', fontsize=12)
+        plt.title('Per-Client Accuracy Across Rounds', fontsize=14, fontweight='bold')
+        plt.legend(loc='best')
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
+        plt.savefig(self.plots_dir / f"{self.experiment_name}_per_client_accuracy_vs_rounds.png", dpi=300)
+        plt.close()
+
+    def plot_weight_drift(self):
+        """Plot Client Weight Drift vs Communication Rounds."""
+        if not self.weight_drift:
+            return
+
+        rounds = sorted(list({m['round'] for m in self.weight_drift}))
+        client_ids = sorted(list({m['client_id'] for m in self.weight_drift}))
+
+        # Build mapping client_id -> {round: drift}
+        client_round_drift = {cid: {r: None for r in rounds} for cid in client_ids}
+        for entry in self.weight_drift:
+            cid = entry['client_id']
+            rnd = entry['round']
+            client_round_drift[cid][rnd] = entry['weight_drift']
+
+        plt.figure(figsize=(10, 6))
+        for cid in client_ids:
+            drifts = [client_round_drift[cid].get(r, None) for r in rounds]
+            drifts = [np.nan if v is None else v for v in drifts]
+            plt.plot(rounds, drifts, marker='o', linewidth=2, markersize=6, label=f'Client {cid}')
+
+        plt.xlabel('Communication Round', fontsize=12)
+        plt.ylabel('Weight Drift (L2)', fontsize=12)
+        plt.title('Client Weight Drift vs Communication Rounds', fontsize=14, fontweight='bold')
+        plt.legend(loc='best')
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
+        plt.savefig(self.plots_dir / f"{self.experiment_name}_weight_drift_vs_rounds.png", dpi=300)
+        plt.close()
     
     def plot_communication_costs(self):
         """Generate plots for communication overhead."""
@@ -246,20 +318,59 @@ class ExperimentLogger:
             plt.tight_layout()
             plt.savefig(self.plots_dir / f"{self.experiment_name}_communication_overhead.png", dpi=300)
             plt.close()
-        
-        # Cumulative communication cost
-        if 'total_bytes' in self.communication_metrics[0]:
-            plt.figure(figsize=(10, 6))
-            total_bytes = [m['total_bytes'] / (1024**2) for m in self.communication_metrics]
-            cumulative = np.cumsum(total_bytes)
-            plt.plot(rounds, cumulative, marker='s', linewidth=2, markersize=6, color='darkblue')
-            plt.xlabel('Communication Round', fontsize=12)
-            plt.ylabel('Cumulative Data Transfer (MB)', fontsize=12)
-            plt.title('Cumulative Communication Overhead', fontsize=14, fontweight='bold')
-            plt.grid(True, alpha=0.3)
-            plt.tight_layout()
-            plt.savefig(self.plots_dir / f"{self.experiment_name}_cumulative_communication.png", dpi=300)
-            plt.close()
+
+    def plot_roc_curve(self, model, test_loader, device):
+        """Plot and save ROC curve for binary classification using the provided model and test loader.
+
+        Args:
+            model: Trained PyTorch model
+            test_loader: DataLoader for test set
+            device: torch.device
+        """
+        try:
+            from sklearn import metrics as skm
+        except Exception:
+            return
+
+        if test_loader is None:
+            return
+
+        model.to(device)
+        model.eval()
+        y_true = []
+        y_score = []
+        with torch.no_grad():
+            for images, labels in test_loader:
+                images = images.to(device)
+                outputs = model(images)
+                probs = torch.softmax(outputs, dim=1).cpu().numpy()
+                # assume binary classification: take prob of positive class (index 1)
+                if probs.shape[1] == 1:
+                    scores = probs[:, 0]
+                else:
+                    scores = probs[:, 1]
+                y_score.extend(scores.tolist())
+                y_true.extend(labels.numpy().tolist())
+
+        if len(set(y_true)) < 2:
+            return
+
+        fpr, tpr, _ = skm.roc_curve(y_true, y_score, pos_label=1)
+        auc_val = skm.auc(fpr, tpr)
+
+        plt.figure(figsize=(8, 6))
+        plt.plot(fpr, tpr, color='darkorange', lw=2, label=f'ROC curve (AUC = {auc_val:.4f})')
+        plt.plot([0, 1], [0, 1], color='navy', lw=1, linestyle='--')
+        plt.xlim([0.0, 1.0])
+        plt.ylim([0.0, 1.05])
+        plt.xlabel('False Positive Rate')
+        plt.ylabel('True Positive Rate')
+        plt.title('Receiver Operating Characteristic (ROC)')
+        plt.legend(loc='lower right')
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
+        plt.savefig(self.plots_dir / f"{self.experiment_name}_roc_curve.png", dpi=300)
+        plt.close()
     
     def generate_summary_report(self):
         """Generate a comprehensive summary report."""

@@ -4,6 +4,7 @@ import torch.optim as optim
 from copy import deepcopy
 from typing import Optional, Tuple, List, Dict
 from tqdm import tqdm
+import torch.nn.utils as nn_utils
 
 
 def train_local(model: nn.Module,
@@ -19,11 +20,10 @@ def train_local(model: nn.Module,
     Returns (state_dict, history) where history is a list of dicts with keys:
     'epoch', 'train_loss', 'train_acc', 'val_loss', 'val_acc'
     """
-    # Create a fresh local model instance and load the global weights.
-    # This avoids deepcopy issues when the global model is on CUDA and
-    # prevents accidental sharing of GPU tensors between copies.
-    local_model = model.__class__()
-    local_model.load_state_dict(deepcopy(model.state_dict()))
+    # Create a fresh local model by deep-copying the global model.
+    # This ensures the local model has the same architecture (including modified final layers)
+    # and avoids shape mismatch when using torchvision models whose constructors differ.
+    local_model = deepcopy(model)
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(local_model.parameters(), lr=lr)
     local_model.to(device)
@@ -45,15 +45,15 @@ def train_local(model: nn.Module,
             outputs = local_model(images)
             loss = criterion(outputs, labels)
             loss.backward()
+            # Gradient clipping to stabilize local training
+            nn_utils.clip_grad_norm_(local_model.parameters(), max_norm=5.0)
             optimizer.step()
 
             running_loss += loss.item() * labels.size(0)
             preds = outputs.argmax(dim=1)
             correct += (preds == labels).sum().item()
             total += labels.size(0)
-            # update running postfix so user sees live metrics without printing lines
-            if total > 0:
-                pbar.set_postfix(train_loss=f"{running_loss/total:.4f}", train_acc=f"{correct/total:.4f}")
+        # end batch loop
         pbar.close()
 
         train_loss = running_loss / total if total > 0 else 0.0

@@ -1,50 +1,51 @@
 ================================================================================
 FEDERATED LEARNING EXPERIMENT REPORT
 Experiment: fedavg_pneumonia_4clients
-Timestamp: 2025-11-21T20:37:08.590833
+Timestamp: 2025-11-22T19:08:43.689990
 ================================================================================
 
 CONFIGURATION:
 --------------------------------------------------------------------------------
-device: cpu
+device: cuda
 seed: 42
 num_clients: 4
-rounds: 30
+rounds: 10
 epochs_per_client: 2
 batch_size: 16
-model: SimpleCNN
+learning_rate: 0.0001
+model: ResNet-18
 aggregation: FedAvg
 dataset: Pneumonia X-Ray
 
 FINAL GLOBAL MODEL PERFORMANCE:
 --------------------------------------------------------------------------------
-accuracy: 0.674227
-precision: 0.614815
-recall: 0.992032
-f1_score: 0.759146
-auc_roc: 0.727245
+accuracy: 0.672165
+precision: 0.612195
+recall: 1.000000
+f1_score: 0.759455
+auc_roc: 0.923358
 
-BEST ACCURACY: 0.738144 (achieved at round 10)
+BEST ACCURACY: 0.767010 (achieved at round 3)
 
 PER-CLIENT PERFORMANCE (Final Round):
 --------------------------------------------------------------------------------
-Mean Accuracy: 1.000000
-Std Deviation: 0.000000
+Mean Accuracy: 0.999745
+Std Deviation: 0.000442
 Variance: 0.000000
-Min Accuracy: 1.000000
+Min Accuracy: 0.998980
 Max Accuracy: 1.000000
 
 Individual Client Results:
-  Client 1: acc=1.0000, f1=1.0000, auc=1.0000
+  Client 1: acc=0.9990, f1=0.9995, auc=1.0000
   Client 2: acc=1.0000, f1=1.0000, auc=1.0000
   Client 3: acc=1.0000, f1=1.0000, auc=1.0000
   Client 4: acc=1.0000, f1=1.0000, auc=1.0000
 
 COMMUNICATION OVERHEAD:
 --------------------------------------------------------------------------------
-Total Rounds: 30
-Total Data Transfer: 11764.75 MB (11.4890 GB)
-Avg per Round: 392.16 MB
+Total Rounds: 10
+Total Data Transfer: 3411.11 MB (3.3312 GB)
+Avg per Round: 341.11 MB
 
 ================================================================================
 Report generation complete.

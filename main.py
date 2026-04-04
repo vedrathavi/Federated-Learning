@@ -2,93 +2,99 @@ import torch
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from models.cnn_model import SimpleCNN
+from torchvision.models import resnet18
+try:
+    from torchvision.models import ResNet18_Weights
+except Exception:
+    ResNet18_Weights = None
+import torch.nn as nn
 from utils.data_utils import load_datasets, split_clients, get_client_loaders, set_seed
 from utils.train_utils import train_local
 from utils.fed_avg import fed_avg
-from utils.metrics_utils import evaluate, evaluate_comprehensive, evaluate_client, compute_client_variance
-from utils.communication_utils import CommunicationTracker, get_model_size_bytes, format_bytes
+from utils.metrics_utils import evaluate_comprehensive, evaluate_client, compute_client_variance
+from utils.communication_utils import CommunicationTracker, get_model_size_bytes, format_bytes, state_dict_l2_distance
+from copy import deepcopy
 from utils.logging_utils import ExperimentLogger
 
 
 def main():
     # Configuration
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print("Using:", device)
+    print(f"Using device: {device}")
 
     # Fixed hyperparameters
     SEED = 42
     NUM_CLIENTS = 4  # Fixed number of clients
-    ROUNDS = 30
+    ROUNDS = 10
     EPOCHS_PER_CLIENT = 2
     BATCH_SIZE = 16
+    LEARNING_RATE = 1e-4  # Learning rate for local training
+    DIRICHLET_ALPHA = 0.5  # Dirichlet concentration for non-IID partition
     
     set_seed(SEED)
     
-    # Initialize experiment logger
     logger = ExperimentLogger(log_dir="logs", experiment_name=f"fedavg_pneumonia_{NUM_CLIENTS}clients")
-    
-    # Log configuration
     config = {
-        'device': str(device),
-        'seed': SEED,
-        'num_clients': NUM_CLIENTS,
-        'rounds': ROUNDS,
-        'epochs_per_client': EPOCHS_PER_CLIENT,
-        'batch_size': BATCH_SIZE,
-        'model': 'SimpleCNN',
-        'aggregation': 'FedAvg',
-        'dataset': 'Pneumonia X-Ray'
+        'device': str(device), 'seed': SEED, 'num_clients': NUM_CLIENTS,
+        'rounds': ROUNDS, 'epochs_per_client': EPOCHS_PER_CLIENT,
+        'batch_size': BATCH_SIZE, 'learning_rate': LEARNING_RATE,
+        'model': 'ResNet-18', 'aggregation': 'FedAvg', 'dataset': 'Pneumonia X-Ray'
     }
     logger.log_config(config)
-    print(f"\nExperiment: {logger.experiment_name}")
-    print(f"Logs will be saved to: {logger.log_dir}")
+    print(f"Experiment: {logger.experiment_name} — logs: {logger.log_dir}")
 
-    # Load datasets
-    dataset, valset, testset = load_datasets("dataset")
-    client_datasets = split_clients(dataset, num_clients=NUM_CLIENTS)
+    trainset, valset, testset = load_datasets("dataset", img_size=224, to_3ch=True)
+    client_datasets = split_clients(trainset, num_clients=NUM_CLIENTS, partition='dirichlet', alpha=DIRICHLET_ALPHA)
     client_loaders = get_client_loaders(client_datasets, batch_size=BATCH_SIZE, num_workers=0)
-    
-    # Create test loader for each client (for per-client evaluation)
-    # We'll use a portion of test set or create client-specific test sets
     test_loader = DataLoader(testset, batch_size=BATCH_SIZE, shuffle=False)
     
-    # Initialize global model
-    global_model = SimpleCNN().to(device)
+    num_classes = len(trainset.classes)
+    # Use weights enum when available to avoid deprecation warning
+    if ResNet18_Weights is not None:
+        weights = ResNet18_Weights.DEFAULT
+        global_model = resnet18(weights=weights)
+    else:
+        global_model = resnet18(pretrained=True)
+    global_model.fc = nn.Linear(global_model.fc.in_features, num_classes)
+    global_model.to(device)
     
     # Initialize communication tracker
     comm_tracker = CommunicationTracker()
     model_size = get_model_size_bytes(global_model)
-    print(f"\nModel size: {format_bytes(model_size)}")
+    print(f"Model size: {format_bytes(model_size)}")
     
     val_loader = DataLoader(valset, batch_size=BATCH_SIZE) if valset is not None else None
 
     # Training loop
-    print(f"\n{'='*80}")
-    print(f"Starting Federated Learning with {NUM_CLIENTS} clients for {ROUNDS} rounds")
-    print(f"{'='*80}\n")
+    print(f"Starting training: {NUM_CLIENTS} clients, {ROUNDS} rounds")
     
     for rnd in range(ROUNDS):
-        tqdm.write(f"\n{'='*60}")
         tqdm.write(f"Round {rnd+1}/{ROUNDS}")
-        tqdm.write(f"{'='*60}")
-        
         local_weights = []
 
         # Local training phase
         for i, loader in enumerate(client_loaders):
             tqdm.write(f"Client {i+1}/{NUM_CLIENTS} training...")
+            # Capture global weights before local update for drift computation
+            global_state_before = deepcopy(global_model.state_dict())
+
             state_dict, history = train_local(
-                global_model, 
-                loader, 
-                device, 
-                val_loader=val_loader, 
-                epochs=EPOCHS_PER_CLIENT, 
+                global_model,
+                loader,
+                device,
+                val_loader=val_loader,
+                epochs=EPOCHS_PER_CLIENT,
+                lr=LEARNING_RATE,
                 client_id=i+1
             )
+
+            # Compute weight drift (L2 distance) between local update and global model
+            drift = state_dict_l2_distance(state_dict, global_state_before)
+            logger.log_weight_drift(round_num=rnd + 1, client_id=i+1, drift_value=drift)
+
             local_weights.append(state_dict)
         
-        # Track communication cost for this round
+        # Track communication cost
         comm_tracker.add_round(rnd + 1, NUM_CLIENTS, model_size)
         comm_cost = comm_tracker.round_costs[-1]
         logger.log_communication_metrics(
@@ -109,103 +115,44 @@ def main():
         # Evaluate global model on test set
         global_metrics = evaluate_comprehensive(global_model, test_loader, device)
         logger.log_global_metrics(round_num=rnd + 1, metrics=global_metrics)
-        
-        tqdm.write(f"\nGlobal model performance (Round {rnd+1}):")
-        tqdm.write(f"  Accuracy:  {global_metrics['accuracy']:.4f}")
-        tqdm.write(f"  Precision: {global_metrics['precision']:.4f}")
-        tqdm.write(f"  Recall:    {global_metrics['recall']:.4f}")
-        tqdm.write(f"  F1 Score:  {global_metrics['f1_score']:.4f}")
-        tqdm.write(f"  AUC-ROC:   {global_metrics['auc_roc']:.4f}")
-        
-        # Log communication for this round
-        tqdm.write(f"\nCommunication overhead:")
-        tqdm.write(f"  Total: {format_bytes(comm_cost['total_bytes'])}")
+        # Print concise global metrics for monitoring
+        tqdm.write(f"Round {rnd+1} global -> acc: {global_metrics['accuracy']:.4f}, f1: {global_metrics['f1_score']:.4f}, auc: {global_metrics['auc_roc']:.4f}")
+
+        # Evaluate and log per-client performance for this round (global model on each client's local data)
+        for i, loader in enumerate(client_loaders):
+            client_metrics = evaluate_client(global_model, loader, device, client_id=i+1)
+            logger.log_client_metrics(round_num=rnd + 1, client_id=i+1, metrics=client_metrics)
+
+        # Log communication for this round (concise)
+        tqdm.write(f"Comm: {format_bytes(comm_cost['total_bytes'])}")
 
     # ========================================================================
     # Final comprehensive evaluation
     # ========================================================================
-    print(f"\n{'='*80}")
-    print(f"FINAL EVALUATION - ROUND {ROUNDS}")
-    print(f"{'='*80}\n")
-    
-    # 1. Global model evaluation on test set
-    print("1. Global Model Performance on Test Set:")
-    print("-" * 80)
+    # Final evaluation and summary
     final_global_metrics = evaluate_comprehensive(global_model, test_loader, device)
-    for metric, value in final_global_metrics.items():
-        print(f"   {metric.replace('_', ' ').title()}: {value:.6f}")
-    
-    # 2. Per-client evaluation on test set
-    print(f"\n2. Per-Client Performance on Test Set:")
-    print("-" * 80)
-    client_final_metrics = []
-    client_accuracies = []
-    
-    for i, loader in enumerate(client_loaders):
-        # Evaluate each client's local data with global model
-        client_metrics = evaluate_client(global_model, loader, device, client_id=i+1)
-        client_final_metrics.append(client_metrics)
-        client_accuracies.append(client_metrics['accuracy'])
-        
-        # Log to logger
-        logger.log_client_metrics(
-            round_num=ROUNDS,
-            client_id=i+1,
-            metrics=client_metrics
-        )
-        
-        print(f"   Client {i+1}:")
-        print(f"      Accuracy:  {client_metrics['accuracy']:.4f}")
-        print(f"      F1 Score:  {client_metrics['f1_score']:.4f}")
-        print(f"      AUC-ROC:   {client_metrics['auc_roc']:.4f}")
-        print(f"      Samples:   {client_metrics['num_samples']}")
-    
-    # 3. Client performance variance
-    print(f"\n3. Client Performance Statistics:")
-    print("-" * 80)
-    accuracy_variance = compute_client_variance(client_final_metrics, 'accuracy')
-    f1_variance = compute_client_variance(client_final_metrics, 'f1_score')
-    
-    print(f"   Accuracy - Mean: {sum(client_accuracies)/len(client_accuracies):.4f}, "
-          f"Variance: {accuracy_variance:.6f}, Std: {accuracy_variance**0.5:.6f}")
-    print(f"   F1 Score - Variance: {f1_variance:.6f}")
-    
-    # 4. Communication summary
-    print(f"\n4. Communication Overhead Summary:")
-    print("-" * 80)
-    comm_summary = comm_tracker.get_summary()
-    print(f"   Total Rounds: {comm_summary['total_rounds']}")
-    print(f"   Model Size: {comm_summary['model_size_formatted']}")
-    print(f"   Total Data Transfer: {comm_summary['total_bytes_formatted']}")
-    print(f"   Avg per Round: {comm_summary['avg_bytes_per_round_formatted']}")
+    print("Final global metrics:", ", ".join([f"{k}={v:.4f}" for k,v in final_global_metrics.items()]))
+
+    final_round = ROUNDS
+    final_client_metrics = [m for m in logger.client_metrics if m['round'] == final_round]
+    client_accuracies = [m['accuracy'] for m in final_client_metrics]
+    mean_acc = float(sum(client_accuracies)/len(client_accuracies)) if client_accuracies else 0.0
+    accuracy_variance = compute_client_variance(final_client_metrics, 'accuracy')
+    print(f"Per-client mean accuracy: {mean_acc:.4f}, variance: {accuracy_variance:.6f}")
     
     # ========================================================================
     # Generate visualizations and reports
     # ========================================================================
-    print(f"\n{'='*80}")
-    print("Generating Visualizations and Reports...")
-    print(f"{'='*80}\n")
-    
+    # Generate plots and summary
     logger.plot_global_metrics()
-    print("✓ Generated global metrics plots")
-    
     logger.plot_client_performance(final_round=ROUNDS)
-    print("✓ Generated per-client performance plots")
-    
+    logger.plot_client_accuracy_over_rounds()
     logger.plot_communication_costs()
-    print("✓ Generated communication overhead plots")
-    
+    # Final ROC curve for global model
+    logger.plot_roc_curve(global_model, test_loader, device)
     summary_report = logger.generate_summary_report()
-    print("✓ Generated summary report")
-    
-    print(f"\n{'='*80}")
-    print(f"Experiment Complete!")
-    print(f"{'='*80}")
-    print(f"\nAll results saved to: {logger.log_dir}")
-    print(f"  - Metrics CSVs: {logger.log_dir}")
-    print(f"  - Plots: {logger.plots_dir}")
-    print(f"  - Summary: {logger.log_dir}/{logger.experiment_name}_summary.txt")
-    print(f"\n{'='*80}\n")
+
+    print(f"Experiment complete. Results saved to: {logger.log_dir}")
 
 
 if __name__ == "__main__":

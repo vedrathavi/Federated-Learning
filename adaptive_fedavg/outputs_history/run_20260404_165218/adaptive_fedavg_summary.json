@@ -1,0 +1,32 @@
+{
+  "timestamp": "2026-03-16T23:35:51.284718",
+  "config": {
+    "data_dir": "D:\\federated learning\\dataset",
+    "num_clients": 4,
+    "num_rounds": 25,
+    "local_epochs": 6,
+    "local_batch_size": 8,
+    "lr": 0.0005,
+    "weight_decay": 0.0001,
+    "image_size": 224,
+    "seed": 42,
+    "device": "cuda",
+    "adaptive": {
+      "beta_size": 0.6,
+      "beta_perf": 0.4,
+      "perf_temperature": 5.0
+    },
+    "iid_split": true,
+    "fixed_clients": 4,
+    "backbone_freeze_strategy": "full except BatchNorm (fc head fully trainable)",
+    "augmentation": "flip + rotation10 + colorjitter"
+  },
+  "final_metrics": {
+    "accuracy": 0.8865979381443299,
+    "f1": 0.9001814882032668,
+    "auc": 0.9624578608642353
+  },
+  "best_global_accuracy": 0.9195876288659793,
+  "best_global_f1": 0.9259962049335864,
+  "best_global_auc": 0.964432866823305
+}

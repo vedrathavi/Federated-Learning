@@ -1,11 +1,12 @@
 {
-    "device": "cpu",
+    "device": "cuda",
     "seed": 42,
     "num_clients": 4,
-    "rounds": 30,
+    "rounds": 10,
     "epochs_per_client": 2,
     "batch_size": 16,
-    "model": "SimpleCNN",
+    "learning_rate": 0.0001,
+    "model": "ResNet-18",
     "aggregation": "FedAvg",
     "dataset": "Pneumonia X-Ray"
 }

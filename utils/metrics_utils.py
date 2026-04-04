@@ -6,6 +6,7 @@ from sklearn.metrics import (
 )
 from typing import Dict, Tuple, List
 import torch.nn.functional as F
+import numpy as np
 
 
 def evaluate(model, dataloader, device, return_probs=False):
@@ -66,13 +67,15 @@ def evaluate_comprehensive(model, dataloader, device) -> Dict[str, float]:
         'recall': recall_score(y_true, y_pred, average='binary', zero_division=0),
         'f1_score': f1_score(y_true, y_pred, average='binary', zero_division=0),
     }
-    
-    # Calculate AUC-ROC
+
+    # Calculate AUC-ROC if possible
     try:
-        metrics['auc_roc'] = roc_auc_score(y_true, y_probs)
-    except ValueError:
-        # Handle case where only one class is present
-        metrics['auc_roc'] = 0.0
+        if len(np.unique(y_true)) > 1:
+            metrics['auc_roc'] = float(roc_auc_score(y_true, y_probs))
+        else:
+            metrics['auc_roc'] = float('nan')
+    except Exception:
+        metrics['auc_roc'] = float('nan')
     
     return metrics
 
