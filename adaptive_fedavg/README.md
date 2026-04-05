@@ -28,7 +28,13 @@ Where performance weights are temperature-scaled to emphasize better clients.
 From workspace root:
 
 ```powershell
-python adaptive_fedavg/adaptive_fedavg_pneumonia_cnn.py
+python adaptive_fedavg/main.py
+```
+
+To run the same code on a different dataset and save outputs to a different folder:
+
+```powershell
+python adaptive_fedavg/main.py --data-dir "D:\\my_other_dataset" --output-dir "D:\\adaptive_runs\\dataset_b" --output-history-dir "D:\\adaptive_runs\\history"
 ```
 
 ## Current training setup
