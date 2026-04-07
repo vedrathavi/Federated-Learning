@@ -1,0 +1,7 @@
+# NIH dataset images (keep local, do not version in Git)
+nih-dataset/images-224/
+
+
+# Python cache artifacts
+**/__pycache__/
+*.pyc

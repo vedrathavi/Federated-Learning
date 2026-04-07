@@ -32,12 +32,12 @@ import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, WeightedRandomSampler
 from torchvision import transforms, datasets
 from tqdm import tqdm, trange
 from PIL import Image, ImageFile
 
-from sklearn.metrics import accuracy_score, f1_score, roc_auc_score, roc_curve, confusion_matrix
+from sklearn.metrics import accuracy_score, f1_score, roc_auc_score, roc_curve, confusion_matrix, precision_recall_fscore_support
 
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
@@ -78,6 +78,11 @@ BETA_SIZE = 0.6          # contribution of client data-size weight
 BETA_PERF = 0.4          # contribution of client performance weight
 PERF_TEMPERATURE = 5.0   # raised from 2.0 — sharpens adaptive weight toward better-performing clients
 MIN_CLIENT_WEIGHT = 1e-6
+
+# Optional robust loss for heavy class imbalance.
+USE_FOCAL_LOSS = False
+FOCAL_ALPHA = 0.75
+FOCAL_GAMMA = 2.0
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -186,18 +191,45 @@ def create_model():
     return PneumoniaCNN(in_channels=3)
 
 
+class FocalLoss(nn.Module):
+    def __init__(self, alpha=0.75, gamma=2.0, pos_weight=None):
+        super().__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+        self.pos_weight = pos_weight
+
+    def forward(self, logits, targets):
+        bce = nn.functional.binary_cross_entropy_with_logits(
+            logits,
+            targets,
+            pos_weight=self.pos_weight,
+            reduction="none",
+        )
+        pt = torch.exp(-bce)
+        focal = self.alpha * ((1.0 - pt) ** self.gamma) * bce
+        return focal.mean()
+
+
 def local_train(model, dataloader, device, epochs=1, lr=1e-3, weight_decay=1e-4):
     model.train()
 
     optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
     scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=1, gamma=0.95)
 
-    pos_weight = getattr(dataloader, "pos_weight", None)
-    if pos_weight is not None:
-        pos_w_tensor = torch.tensor([pos_weight], dtype=torch.float32, device=device)
-        criterion = nn.BCEWithLogitsLoss(pos_weight=pos_w_tensor)
+    train_dataset = dataloader.dataset
+    if hasattr(train_dataset, "targets"):
+        label_list = [int(label) for label in train_dataset.targets]
     else:
-        criterion = nn.BCEWithLogitsLoss()
+        label_list = [int(label) for _, label in train_dataset]
+
+    num_pos = sum(label_list)
+    num_neg = len(label_list) - num_pos
+    pos_weight = torch.tensor([num_neg / (num_pos + 1e-6)], dtype=torch.float32, device=device)
+
+    if USE_FOCAL_LOSS:
+        criterion = FocalLoss(alpha=FOCAL_ALPHA, gamma=FOCAL_GAMMA, pos_weight=pos_weight)
+    else:
+        criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
 
     running_loss = 0.0
     total_batches = 0
@@ -263,10 +295,14 @@ def evaluate_model(model, dataloader, device):
 
     ys = np.array(ys)
     probs = np.array(probs)
-    preds = (probs >= 0.5).astype(int)
+    preds = (probs >= 0.2).astype(int)
     tn, fp, fn, tp = confusion_matrix(ys, preds, labels=[0, 1]).ravel()
-    precision = tp / max(tp + fp, 1)
-    recall = tp / max(tp + fn, 1)
+    precision, recall, f1, _ = precision_recall_fscore_support(
+        ys,
+        preds,
+        average="binary",
+        zero_division=0,
+    )
     specificity = tn / max(tn + fp, 1)
     sensitivity = recall
     balanced_accuracy = 0.5 * (recall + specificity)
@@ -277,8 +313,6 @@ def evaluate_model(model, dataloader, device):
         auc = float("nan")
 
     acc = accuracy_score(ys, preds)
-    f1 = f1_score(ys, preds, zero_division=0)
-
     return {
         "accuracy": float(acc),
         "precision": float(precision),
@@ -311,18 +345,20 @@ def get_loader_from_indices(dataset, indices, batch_size, train_transform, eval_
     ds.transform = train_transform if shuffle_train else eval_transform
 
     if shuffle_train:
-        targets = ds.targets
-        class_counts = {}
-        for t in targets:
-            class_counts[t] = class_counts.get(t, 0) + 1
+        labels = [int(label) for label in ds.targets]
+        num_pos = sum(labels)
+        num_neg = len(labels) - num_pos
 
-        weights = [1.0 / class_counts[t] for t in targets]
-        sampler = torch.utils.data.WeightedRandomSampler(weights, num_samples=len(weights), replacement=True)
+        class_counts = [max(num_neg, 1), max(num_pos, 1)]
+        class_weights = 1.0 / torch.tensor(class_counts, dtype=torch.float32)
+        sample_weights = [float(class_weights[label]) for label in labels]
+
+        sampler = WeightedRandomSampler(
+            sample_weights,
+            num_samples=len(sample_weights),
+            replacement=True,
+        )
         loader = DataLoader(ds, batch_size=batch_size, sampler=sampler, num_workers=NUM_WORKERS, pin_memory=False)
-
-        pos = sum(1 for t in targets if t == 1)
-        neg = len(targets) - pos
-        loader.pos_weight = (neg / pos) if pos > 0 else 1.0
         return loader
 
     return DataLoader(ds, batch_size=batch_size, shuffle=False, num_workers=NUM_WORKERS, pin_memory=False)

@@ -1,3 +1,5 @@
+import argparse
+import os
 import torch
 from torch.utils.data import DataLoader
 from tqdm import tqdm
@@ -17,7 +19,32 @@ from copy import deepcopy
 from utils.logging_utils import ExperimentLogger
 
 
+def parse_args():
+    parser = argparse.ArgumentParser(description="FedAvg training for pneumonia detection")
+    parser.add_argument(
+        "--data-dir",
+        type=str,
+        default="dataset",
+        help="Dataset root containing train/val/test folders",
+    )
+    parser.add_argument(
+        "--log-dir",
+        type=str,
+        default="logs",
+        help="Directory where logs/metrics/plots are saved",
+    )
+    parser.add_argument(
+        "--run-tag",
+        type=str,
+        default="",
+        help="Optional suffix appended to experiment name (e.g., dataset name)",
+    )
+    return parser.parse_args()
+
+
 def main():
+    args = parse_args()
+
     # Configuration
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
@@ -32,18 +59,29 @@ def main():
     DIRICHLET_ALPHA = 0.5  # Dirichlet concentration for non-IID partition
     
     set_seed(SEED)
+
+    data_dir = os.path.abspath(args.data_dir)
+    log_dir = os.path.abspath(args.log_dir)
+    if not os.path.isdir(data_dir):
+        raise FileNotFoundError(f"Dataset directory not found: {data_dir}")
+
+    experiment_name = f"fedavg_pneumonia_{NUM_CLIENTS}clients"
+    if args.run_tag.strip():
+        experiment_name = f"{experiment_name}_{args.run_tag.strip()}"
     
-    logger = ExperimentLogger(log_dir="logs", experiment_name=f"fedavg_pneumonia_{NUM_CLIENTS}clients")
+    logger = ExperimentLogger(log_dir=log_dir, experiment_name=experiment_name)
     config = {
         'device': str(device), 'seed': SEED, 'num_clients': NUM_CLIENTS,
         'rounds': ROUNDS, 'epochs_per_client': EPOCHS_PER_CLIENT,
         'batch_size': BATCH_SIZE, 'learning_rate': LEARNING_RATE,
-        'model': 'ResNet-18', 'aggregation': 'FedAvg', 'dataset': 'Pneumonia X-Ray'
+        'model': 'ResNet-18', 'aggregation': 'FedAvg', 'dataset': 'Pneumonia X-Ray',
+        'dataset_path': data_dir, 'log_dir': log_dir
     }
     logger.log_config(config)
     print(f"Experiment: {logger.experiment_name} — logs: {logger.log_dir}")
+    print(f"Dataset path: {data_dir}")
 
-    trainset, valset, testset = load_datasets("dataset", img_size=224, to_3ch=True)
+    trainset, valset, testset = load_datasets(data_dir, img_size=224, to_3ch=True)
     client_datasets = split_clients(trainset, num_clients=NUM_CLIENTS, partition='dirichlet', alpha=DIRICHLET_ALPHA)
     client_loaders = get_client_loaders(client_datasets, batch_size=BATCH_SIZE, num_workers=0)
     test_loader = DataLoader(testset, batch_size=BATCH_SIZE, shuffle=False)

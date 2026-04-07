@@ -34,12 +34,12 @@ import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
 from torchvision import transforms, datasets
 from tqdm import tqdm
 from PIL import Image, ImageFile
 
-from sklearn.metrics import accuracy_score, f1_score, roc_auc_score, roc_curve, confusion_matrix
+from sklearn.metrics import accuracy_score, f1_score, roc_auc_score, roc_curve, confusion_matrix, precision_recall_fscore_support
 
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
@@ -72,10 +72,10 @@ OUTPUT_HISTORY_DIR = DEFAULT_OUTPUT_HISTORY_DIR
 NUM_CLIENTS = 4
 NUM_ROUNDS = 20
 LOCAL_EPOCHS = 5
-LOCAL_BATCH_SIZE = 8
+LOCAL_BATCH_SIZE = 16
 LR = 5e-4
 WEIGHT_DECAY = 1e-4
-IMAGE_SIZE = 224
+IMAGE_SIZE = 128
 NUM_WORKERS = 0
 SEED = 42
 
@@ -84,6 +84,11 @@ BETA_SIZE = 0.6          # contribution of client data-size weight
 BETA_PERF = 0.4          # contribution of client performance weight
 PERF_TEMPERATURE = 5.0   # raised from 2.0 — sharpens adaptive weight toward better-performing clients
 MIN_CLIENT_WEIGHT = 1e-6
+
+# Optional robust loss for heavy class imbalance.
+USE_FOCAL_LOSS = False
+FOCAL_ALPHA = 0.75
+FOCAL_GAMMA = 2.0
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 if torch.cuda.is_available():
@@ -176,6 +181,113 @@ def filter_valid_samples(dataset):
     return dataset
 
 
+class NIHPneumoniaBinaryDataset(Dataset):
+    """Binary NIH dataset where label 1 means Pneumonia is present, else 0."""
+
+    def __init__(self, samples, transform, root):
+        self.samples = samples
+        self.targets = [label for _, label in samples]
+        self.transform = transform
+        self.root = root
+        self.classes = ["non_pneumonia", "pneumonia"]
+        self.class_to_idx = {"non_pneumonia": 0, "pneumonia": 1}
+
+    def __len__(self):
+        return len(self.samples)
+
+    def __getitem__(self, idx):
+        image_path, label = self.samples[idx]
+        with Image.open(image_path) as image:
+            image = image.convert("RGB")
+        if self.transform is not None:
+            image = self.transform(image)
+        return image, label
+
+
+def infer_dataset_name(data_dir):
+    name = os.path.basename(os.path.normpath(data_dir))
+    return name if name else "dataset"
+
+
+def make_dataset_tag(dataset_name):
+    cleaned = "".join(ch if ch.isalnum() else "_" for ch in dataset_name.lower())
+    cleaned = cleaned.strip("_")
+    return cleaned if cleaned else "dataset"
+
+
+def resolve_nih_images_root(data_dir):
+    candidates = [
+        os.path.join(data_dir, "images-224", "images-224"),
+        os.path.join(data_dir, "images-224"),
+    ]
+    for candidate in candidates:
+        if os.path.isdir(candidate):
+            return candidate
+    return None
+
+
+def build_nih_binary_splits(data_dir, train_transform, eval_transform):
+    csv_path = os.path.join(data_dir, "Data_Entry_2017.csv")
+    train_list_path = os.path.join(data_dir, "train_val_list_NIH.txt")
+    test_list_path = os.path.join(data_dir, "test_list_NIH.txt")
+    images_root = resolve_nih_images_root(data_dir)
+
+    if images_root is None:
+        raise FileNotFoundError(f"NIH images folder not found under {data_dir}")
+
+    metadata = pd.read_csv(csv_path, usecols=["Image Index", "Finding Labels"])
+    labels_by_image = dict(zip(metadata["Image Index"], metadata["Finding Labels"]))
+
+    def label_from_findings(findings):
+        labels = [item.strip() for item in str(findings).split("|") if item.strip()]
+        return 1 if "Pneumonia" in labels else 0
+
+    def read_split(split_list_path):
+        with open(split_list_path, "r", encoding="utf-8") as file:
+            names = [line.strip() for line in file if line.strip()]
+
+        split_samples = []
+        missing_images = 0
+        missing_labels = 0
+        for image_name in names:
+            findings = labels_by_image.get(image_name)
+            if findings is None:
+                missing_labels += 1
+                continue
+            image_path = os.path.join(images_root, image_name)
+            if not os.path.isfile(image_path):
+                missing_images += 1
+                continue
+            split_samples.append((image_path, label_from_findings(findings)))
+
+        return split_samples, missing_images, missing_labels
+
+    train_samples, train_missing_images, train_missing_labels = read_split(train_list_path)
+    test_samples, test_missing_images, test_missing_labels = read_split(test_list_path)
+
+    if len(train_samples) == 0 or len(test_samples) == 0:
+        raise RuntimeError("NIH split construction produced an empty train or test split")
+
+    print(
+        "NIH split summary:",
+        f"train={len(train_samples)} (missing_images={train_missing_images}, missing_labels={train_missing_labels}),",
+        f"test={len(test_samples)} (missing_images={test_missing_images}, missing_labels={test_missing_labels})",
+    )
+
+    train_pos = sum(label for _, label in train_samples)
+    test_pos = sum(label for _, label in test_samples)
+    print(
+        "NIH class balance:",
+        f"train pneumonia={train_pos}, non_pneumonia={len(train_samples) - train_pos};",
+        f"test pneumonia={test_pos}, non_pneumonia={len(test_samples) - test_pos}",
+    )
+
+    train_dataset = NIHPneumoniaBinaryDataset(train_samples, transform=train_transform, root=data_dir)
+    test_dataset = NIHPneumoniaBinaryDataset(test_samples, transform=eval_transform, root=data_dir)
+
+    return train_dataset, test_dataset
+
+
 def set_seed(seed: int):
     random.seed(seed)
     np.random.seed(seed)
@@ -230,18 +342,47 @@ def create_model():
     return PneumoniaCNN(in_channels=3)
 
 
+class FocalLoss(nn.Module):
+    def __init__(self, alpha=0.75, gamma=2.0, pos_weight=None):
+        super().__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+        self.pos_weight = pos_weight
+
+    def forward(self, logits, targets):
+        bce = nn.functional.binary_cross_entropy_with_logits(
+            logits,
+            targets,
+            pos_weight=self.pos_weight,
+            reduction="none",
+        )
+        pt = torch.exp(-bce)
+        focal = self.alpha * ((1.0 - pt) ** self.gamma) * bce
+        return focal.mean()
+
+
 def local_train(model, dataloader, device, epochs=1, lr=1e-3, weight_decay=1e-4):
     model.train()
 
     optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
     scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=1, gamma=0.95)
 
-    pos_weight = getattr(dataloader, "pos_weight", None)
-    if pos_weight is not None:
-        pos_w_tensor = torch.tensor([pos_weight], dtype=torch.float32, device=device)
-        criterion = nn.BCEWithLogitsLoss(pos_weight=pos_w_tensor)
+    train_dataset = dataloader.dataset
+    if hasattr(train_dataset, "targets"):
+        labels = [int(label) for label in train_dataset.targets]
     else:
-        criterion = nn.BCEWithLogitsLoss()
+        labels = [int(label) for _, label in train_dataset]
+
+    num_pos = sum(labels)
+    num_neg = len(labels) - num_pos
+
+    # avoid division by zero
+    pos_weight = torch.tensor([num_neg / (num_pos + 1e-6)], dtype=torch.float32, device=device)
+
+    if USE_FOCAL_LOSS:
+        criterion = FocalLoss(alpha=FOCAL_ALPHA, gamma=FOCAL_GAMMA, pos_weight=pos_weight)
+    else:
+        criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
 
     running_loss = 0.0
     total_batches = 0
@@ -291,10 +432,14 @@ def evaluate_model(model, dataloader, device):
 
     ys = np.array(ys)
     probs = np.array(probs)
-    preds = (probs >= 0.5).astype(int)
+    preds = (probs >= 0.2).astype(int)
     tn, fp, fn, tp = confusion_matrix(ys, preds, labels=[0, 1]).ravel()
-    precision = tp / max(tp + fp, 1)
-    recall = tp / max(tp + fn, 1)
+    precision, recall, f1, _ = precision_recall_fscore_support(
+        ys,
+        preds,
+        average="binary",
+        zero_division=0,
+    )
     specificity = tn / max(tn + fp, 1)
     sensitivity = recall
     balanced_accuracy = 0.5 * (recall + specificity)
@@ -305,8 +450,6 @@ def evaluate_model(model, dataloader, device):
         auc = float("nan")
 
     acc = accuracy_score(ys, preds)
-    f1 = f1_score(ys, preds, zero_division=0)
-
     return {
         "accuracy": float(acc),
         "precision": float(precision),
@@ -339,18 +482,20 @@ def get_loader_from_indices(dataset, indices, batch_size, train_transform, eval_
     ds.transform = train_transform if shuffle_train else eval_transform
 
     if shuffle_train:
-        targets = ds.targets
-        class_counts = {}
-        for t in targets:
-            class_counts[t] = class_counts.get(t, 0) + 1
+        labels = [int(label) for label in ds.targets]
+        num_pos = sum(labels)
+        num_neg = len(labels) - num_pos
 
-        weights = [1.0 / class_counts[t] for t in targets]
-        sampler = torch.utils.data.WeightedRandomSampler(weights, num_samples=len(weights), replacement=True)
+        class_counts = [max(num_neg, 1), max(num_pos, 1)]
+        class_weights = 1.0 / torch.tensor(class_counts, dtype=torch.float32)
+        sample_weights = [float(class_weights[label]) for label in labels]
+
+        sampler = WeightedRandomSampler(
+            sample_weights,
+            num_samples=len(sample_weights),
+            replacement=True,
+        )
         loader = DataLoader(ds, batch_size=batch_size, sampler=sampler, num_workers=NUM_WORKERS, pin_memory=True)
-
-        pos = sum(1 for t in targets if t == 1)
-        neg = len(targets) - pos
-        loader.pos_weight = (neg / pos) if pos > 0 else 1.0
         return loader
 
     return DataLoader(ds, batch_size=batch_size, shuffle=False, num_workers=NUM_WORKERS, pin_memory=True)
@@ -399,7 +544,7 @@ def compute_weight_drift(global_prev, global_new):
     return float(math.sqrt(sq_sum / numel))
 
 
-def plot_roc_curve(y_true, y_prob, save_path):
+def plot_roc_curve(y_true, y_prob, save_path, dataset_name):
     fpr, tpr, _ = roc_curve(y_true, y_prob)
     auc = roc_auc_score(y_true, y_prob)
 
@@ -408,7 +553,7 @@ def plot_roc_curve(y_true, y_prob, save_path):
     plt.plot([0, 1], [0, 1], linestyle="--")
     plt.xlabel("False Positive Rate")
     plt.ylabel("True Positive Rate")
-    plt.title("ROC Curve - Final Global Model")
+    plt.title(f"ROC Curve - Final Global Model ({dataset_name})")
     plt.grid(True, alpha=0.3)
     plt.legend()
     plt.tight_layout()
@@ -452,6 +597,13 @@ def run(args):
         print(f"GPU: {torch.cuda.get_device_name(0)}")
     print(f"Data directory: {DATA_DIR}")
 
+    dataset_name = infer_dataset_name(DATA_DIR)
+    dataset_tag = make_dataset_tag(dataset_name)
+    print(f"Dataset name: {dataset_name}")
+
+    def plot_path(stem):
+        return os.path.join(PLOTS_DIR, f"{dataset_tag}_{stem}.png")
+
     train_transform = transforms.Compose([
         transforms.Resize((IMAGE_SIZE, IMAGE_SIZE)),
         transforms.RandomHorizontalFlip(),
@@ -467,19 +619,23 @@ def run(args):
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
     ])
 
-    train_root = os.path.join(DATA_DIR, "train")
-    test_root = os.path.join(DATA_DIR, "test")
+    nih_metadata = os.path.join(DATA_DIR, "Data_Entry_2017.csv")
+    if os.path.isfile(nih_metadata):
+        full_train, test_dataset = build_nih_binary_splits(DATA_DIR, train_transform, eval_transform)
+    else:
+        train_root = os.path.join(DATA_DIR, "train")
+        test_root = os.path.join(DATA_DIR, "test")
 
-    if not os.path.isdir(train_root):
-        raise FileNotFoundError(f"Train folder not found at {train_root}")
-    if not os.path.isdir(test_root):
-        raise FileNotFoundError(f"Test folder not found at {test_root}")
+        if not os.path.isdir(train_root):
+            raise FileNotFoundError(f"Train folder not found at {train_root}")
+        if not os.path.isdir(test_root):
+            raise FileNotFoundError(f"Test folder not found at {test_root}")
 
-    full_train = datasets.ImageFolder(train_root, transform=train_transform)
-    test_dataset = datasets.ImageFolder(test_root, transform=eval_transform)
+        full_train = datasets.ImageFolder(train_root, transform=train_transform)
+        test_dataset = datasets.ImageFolder(test_root, transform=eval_transform)
 
-    full_train = filter_valid_samples(full_train)
-    test_dataset = filter_valid_samples(test_dataset)
+        full_train = filter_valid_samples(full_train)
+        test_dataset = filter_valid_samples(test_dataset)
 
     print("Classes (train):", full_train.class_to_idx)
 
@@ -548,7 +704,16 @@ def run(args):
                 weight_decay=WEIGHT_DECAY,
             )
 
-            test_metrics_local = evaluate_model(local_model, test_loader, DEVICE)
+            val_loader = get_loader_from_indices(
+                dataset=full_train,
+                indices=clients[cid]["val_idxs"],
+                batch_size=LOCAL_BATCH_SIZE,
+                train_transform=train_transform,
+                eval_transform=eval_transform,
+                shuffle_train=False,
+            )
+
+            test_metrics_local = evaluate_model(local_model, val_loader, DEVICE)
             local_acc = test_metrics_local["accuracy"]
             local_precision = test_metrics_local["precision"]
             local_recall = test_metrics_local["recall"]
@@ -712,7 +877,8 @@ def run(args):
         plot_roc_curve(
             final_test_eval["y_true"],
             final_test_eval["y_prob"],
-            save_path=os.path.join(PLOTS_DIR, "roc_curve_global.png"),
+            save_path=plot_path("roc_curve_global"),
+            dataset_name=dataset_name,
         )
 
     plot_confusion_matrix(
@@ -720,8 +886,8 @@ def run(args):
         final_test_eval["fp"],
         final_test_eval["fn"],
         final_test_eval["tp"],
-        save_path=os.path.join(PLOTS_DIR, "confusion_matrix_global.png"),
-        title="Global Model Confusion Matrix",
+        save_path=plot_path("confusion_matrix_global"),
+        title=f"Global Model Confusion Matrix ({dataset_name})",
     )
 
     # Save tabular outputs
@@ -744,6 +910,7 @@ def run(args):
         "timestamp": datetime.now().isoformat(),
         "config": {
             "data_dir": DATA_DIR,
+            "dataset_name": dataset_name,
             "num_clients": NUM_CLIENTS,
             "num_rounds": NUM_ROUNDS,
             "local_epochs": LOCAL_EPOCHS,
@@ -782,21 +949,21 @@ def run(args):
     plt.plot(range(1, len(global_round_rows) + 1), [row["global_balanced_accuracy"] for row in global_round_rows], marker="d", linewidth=2, label="Global Balanced Acc")
     plt.xlabel("Communication Round", fontsize=12, fontweight="bold")
     plt.ylabel("Metric Value", fontsize=12, fontweight="bold")
-    plt.title("Global Metrics vs Rounds (Adaptive FedAvg)", fontsize=13, fontweight="bold")
+    plt.title(f"Global Metrics vs Rounds (Adaptive FedAvg) - {dataset_name}", fontsize=13, fontweight="bold")
     plt.grid(True, alpha=0.3)
     plt.legend()
     plt.tight_layout()
-    plt.savefig(os.path.join(PLOTS_DIR, "global_metrics_vs_rounds.png"), dpi=150)
+    plt.savefig(plot_path("global_metrics_vs_rounds"), dpi=150)
     plt.close()
 
     plt.figure(figsize=(8, 5))
     plt.plot(range(1, len(weight_drift_rows) + 1), [row["global_weight_drift_l2"] for row in weight_drift_rows], marker="o", linewidth=2, color="tab:purple")
     plt.xlabel("Communication Round", fontsize=12, fontweight="bold")
     plt.ylabel("L2 Drift", fontsize=12, fontweight="bold")
-    plt.title("Global Weight Drift vs Rounds", fontsize=13, fontweight="bold")
+    plt.title(f"Global Weight Drift vs Rounds - {dataset_name}", fontsize=13, fontweight="bold")
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
-    plt.savefig(os.path.join(PLOTS_DIR, "weight_drift_vs_rounds.png"), dpi=150)
+    plt.savefig(plot_path("weight_drift_vs_rounds"), dpi=150)
     plt.close()
 
     plt.figure(figsize=(12, 7))
@@ -821,13 +988,13 @@ def run(args):
 
     plt.xlabel("Federated Round", fontsize=13, fontweight="bold")
     plt.ylabel("Shared Test Accuracy", fontsize=13, fontweight="bold")
-    plt.title("Client-wise Accuracy Trajectories (Smoothed)", fontsize=14, fontweight="bold")
+    plt.title(f"Client-wise Accuracy Trajectories (Smoothed) - {dataset_name}", fontsize=14, fontweight="bold")
     plt.legend(loc="best", fontsize=10, ncol=2)
     plt.grid(True, alpha=0.4, linestyle="--")
     plt.xticks(range(1, NUM_ROUNDS + 1))
     plt.ylim(0.0, 1.0)
     plt.tight_layout()
-    plt.savefig(os.path.join(PLOTS_DIR, "client_accuracy_over_rounds.png"), dpi=150)
+    plt.savefig(plot_path("client_accuracy_over_rounds"), dpi=150)
     plt.close()
 
     plt.figure(figsize=(10, 6))
@@ -838,11 +1005,11 @@ def run(args):
     plt.plot(range(1, len(global_acc_history) + 1), global_acc_history, color="black", linewidth=3, label="Global aggregated")
     plt.xlabel("Round", fontsize=12, fontweight="bold")
     plt.ylabel("Accuracy", fontsize=12, fontweight="bold")
-    plt.title("Client Convergence Under Adaptive Aggregation", fontsize=13, fontweight="bold")
+    plt.title(f"Client Convergence Under Adaptive Aggregation - {dataset_name}", fontsize=13, fontweight="bold")
     plt.grid(True, alpha=0.3)
     plt.legend(ncol=2)
     plt.tight_layout()
-    plt.savefig(os.path.join(PLOTS_DIR, "client_convergence_effect.png"), dpi=150)
+    plt.savefig(plot_path("client_convergence_effect"), dpi=150)
     plt.close()
 
     plt.figure(figsize=(8, 5))
@@ -852,12 +1019,12 @@ def run(args):
     plt.plot(client_df["client"].astype(str), client_df["auc"], marker="s", linewidth=2, label="AUC")
     plt.xlabel("Client ID", fontsize=12, fontweight="bold")
     plt.ylabel("Score", fontsize=12, fontweight="bold")
-    plt.title("Final Per-Client Validation Metrics", fontsize=13, fontweight="bold")
+    plt.title(f"Final Per-Client Validation Metrics - {dataset_name}", fontsize=13, fontweight="bold")
     plt.ylim(0, 1.05)
     plt.grid(axis="y", alpha=0.3)
     plt.legend()
     plt.tight_layout()
-    plt.savefig(os.path.join(PLOTS_DIR, "final_metrics_per_client.png"), dpi=150)
+    plt.savefig(plot_path("final_metrics_per_client"), dpi=150)
     plt.close()
 
     print("\nTraining complete. Detailed outputs saved in:")

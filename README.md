@@ -43,6 +43,12 @@ python -m pip install --user torch torchvision scikit-learn tqdm
 python main.py
 ```
 
+To run the same code on another dataset and store results in a separate location:
+
+```powershell
+python main.py --data-dir "D:\\my_other_dataset" --log-dir "D:\\fed_runs\\dataset_b" --run-tag "dataset_b"
+```
+
 ## What the code does (step-by-step)
 
 1. Set deterministic seeds via `utils/data_utils.set_seed(42)` for reproducible behavior.
