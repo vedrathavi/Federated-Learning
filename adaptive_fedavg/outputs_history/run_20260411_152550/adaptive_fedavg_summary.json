@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-04-12T04:56:00.120475",
+  "timestamp": "2026-04-11T13:10:29.681852",
   "config": {
     "data_dir": "D:\\federated learning\\nih-dataset",
     "dataset_name": "nih-dataset",
@@ -41,15 +41,13 @@
     "max_samples_per_class": 2000
   },
   "final_metrics": {
-    "accuracy": 0.3006524443626404,
-    "f1_macro": 0.15392292619358452,
-    "f1_micro": 0.17366416618580496,
-    "auc": 0.7311237629489215
+    "accuracy": 0.19725459814071655,
+    "f1_macro": 0.1416216596530284,
+    "f1_micro": 0.15705063398710048,
+    "auc": 0.7070000987540757
   },
-  "best_threshold": 0.5,
-  "best_f1_macro": 0.2032725239109063,
-  "best_global_accuracy": 0.3006524443626404,
-  "best_global_f1_macro": 0.15392292619358452,
-  "best_global_f1_micro": 0.17366416618580496,
-  "best_global_auc": 0.7311237629489215
+  "best_global_accuracy": 0.19725459814071655,
+  "best_global_f1_macro": 0.14190741762740477,
+  "best_global_f1_micro": 0.15705063398710048,
+  "best_global_auc": 0.7070000987540757
 }

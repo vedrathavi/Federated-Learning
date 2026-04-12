@@ -58,7 +58,7 @@ plt.rcParams.update({
 # -----------------------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(BASE_DIR)
-DATA_DIR = os.path.join(PROJECT_ROOT, "nih-dataset")
+DATA_DIR = os.path.join(PROJECT_ROOT, "dataset")
 OUTPUT_DIR = os.path.join(BASE_DIR, "outputs")
 PLOTS_DIR = os.path.join(OUTPUT_DIR, "plots")
 OUTPUT_HISTORY_DIR = os.path.join(BASE_DIR, "outputs_history")
@@ -83,11 +83,6 @@ MIN_CLIENT_WEIGHT = 1e-6
 USE_FOCAL_LOSS = False
 FOCAL_ALPHA = 0.75
 FOCAL_GAMMA = 2.0
-
-# Decision threshold for binary prediction at evaluation time.
-EVAL_THRESHOLD = 0.2
-# Reduce class reweighting intensity to avoid over-compensation.
-POS_WEIGHT_SCALE = 0.5
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -229,7 +224,7 @@ def local_train(model, dataloader, device, epochs=1, lr=1e-3, weight_decay=1e-4)
 
     num_pos = sum(label_list)
     num_neg = len(label_list) - num_pos
-    pos_weight = torch.tensor([POS_WEIGHT_SCALE * (num_neg / (num_pos + 1e-6))], dtype=torch.float32, device=device)
+    pos_weight = torch.tensor([num_neg / (num_pos + 1e-6)], dtype=torch.float32, device=device)
 
     if USE_FOCAL_LOSS:
         criterion = FocalLoss(alpha=FOCAL_ALPHA, gamma=FOCAL_GAMMA, pos_weight=pos_weight)
@@ -300,7 +295,7 @@ def evaluate_model(model, dataloader, device):
 
     ys = np.array(ys)
     probs = np.array(probs)
-    preds = (probs >= EVAL_THRESHOLD).astype(int)
+    preds = (probs >= 0.2).astype(int)
     tn, fp, fn, tp = confusion_matrix(ys, preds, labels=[0, 1]).ravel()
     precision, recall, f1, _ = precision_recall_fscore_support(
         ys,
@@ -524,7 +519,7 @@ def run():
 
         local_weights = []
         local_sizes = []
-        local_perf_f1 = []
+        local_test_acc = []
 
         prev_global_cpu = {k: v.detach().cpu().clone() for k, v in global_weights.items()}
 
@@ -568,7 +563,7 @@ def run():
 
             local_weights.append({k: v.detach().cpu().clone() for k, v in updated_weights.items()})
             local_sizes.append(len(train_idxs))
-            local_perf_f1.append(local_f1)
+            local_test_acc.append(local_acc)
 
             client_test_acc_history[cid][-1] = local_acc
 
@@ -604,7 +599,7 @@ def run():
         new_global_cpu, size_w, perf_w, adapt_w = adaptive_fedavg(
             local_weights=local_weights,
             local_sizes=local_sizes,
-            local_performances=local_perf_f1,
+            local_performances=local_test_acc,
             beta_size=BETA_SIZE,
             beta_perf=BETA_PERF,
             temperature=PERF_TEMPERATURE,
