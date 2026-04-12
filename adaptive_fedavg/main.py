@@ -71,7 +71,7 @@ PLOTS_DIR = os.path.join(OUTPUT_DIR, "plots")
 OUTPUT_HISTORY_DIR = DEFAULT_OUTPUT_HISTORY_DIR
 
 NUM_CLIENTS = 4
-NUM_ROUNDS = 20
+NUM_ROUNDS = 25
 LOCAL_EPOCHS = 5
 LOCAL_BATCH_SIZE = 16
 LR = 5e-4
@@ -646,6 +646,7 @@ def run(args):
     global_round_rows = []
     client_round_rows = []
     weight_drift_rows = []
+    best_threshold_round_rows = []
 
     client_test_acc_history = {cid: [] for cid in range(NUM_CLIENTS)}
     global_acc_history = []
@@ -766,10 +767,23 @@ def run(args):
         weight_drift_rows.append({"round": rnd, "global_weight_drift_l2": drift_l2})
 
         global_metrics = evaluate_model(global_model, test_loader, DEVICE)
+        best_round = find_best_threshold(global_metrics["y_true"], global_metrics["y_prob"])
         global_acc_history.append(global_metrics["accuracy"])
         global_f1_history.append(global_metrics["f1"])
         global_f1_micro_history.append(global_metrics["f1_micro"])
         global_auc_history.append(global_metrics["auc"])
+
+        best_threshold_round_rows.append({
+            "round": rnd,
+            "fixed_threshold": float(EVAL_THRESHOLD),
+            "fixed_precision_macro": float(global_metrics["precision"]),
+            "fixed_recall_macro": float(global_metrics["recall"]),
+            "fixed_f1_macro": float(global_metrics["f1"]),
+            "best_threshold": float(best_round["threshold"]),
+            "best_precision_macro": float(best_round["precision"]),
+            "best_recall_macro": float(best_round["recall"]),
+            "best_f1_macro": float(best_round["f1"]),
+        })
 
         global_round_rows.append({
             "round": rnd,
@@ -780,6 +794,8 @@ def run(args):
             "global_f1_micro": global_metrics["f1_micro"],
             "global_f1_per_class": json.dumps(global_metrics["f1_per_class"]),
             "global_auc": global_metrics["auc"],
+            "best_threshold": float(best_round["threshold"]),
+            "best_f1_macro": float(best_round["f1"]),
             "mean_client_accuracy": float(np.nanmean([r["local_test_accuracy"] for r in selected_client_rows])),
             "std_client_accuracy": float(np.nanstd([r["local_test_accuracy"] for r in selected_client_rows])),
             "global_weight_drift_l2": drift_l2,
@@ -791,6 +807,10 @@ def run(args):
             f"Rec: {global_metrics['recall']:.4f}, F1(macro): {global_metrics['f1']:.4f}, "
             f"F1(micro): {global_metrics['f1_micro']:.4f}, AUC: {global_metrics['auc']:.4f}, "
             f" | Drift(L2): {drift_l2:.6f}"
+        )
+        print(
+            f"Thresholds -> Fixed({EVAL_THRESHOLD:.2f}) F1: {global_metrics['f1']:.4f}, "
+            f"Best({best_round['threshold']:.2f}) F1: {best_round['f1']:.4f}"
         )
         print(f"Adaptive weights: {weights_msg}")
 
@@ -866,11 +886,13 @@ def run(args):
     global_df = pd.DataFrame(global_round_rows)
     client_round_df = pd.DataFrame(client_round_rows)
     drift_df = pd.DataFrame(weight_drift_rows)
+    threshold_df = pd.DataFrame(best_threshold_round_rows)
     per_client_df = pd.DataFrame(per_client_results)
 
     global_df.to_csv(os.path.join(OUTPUT_DIR, "global_round_metrics.csv"), index=False)
     client_round_df.to_csv(os.path.join(OUTPUT_DIR, "client_round_metrics.csv"), index=False)
     drift_df.to_csv(os.path.join(OUTPUT_DIR, "weight_drift.csv"), index=False)
+    threshold_df.to_csv(os.path.join(OUTPUT_DIR, "best_threshold_round_metrics.csv"), index=False)
     per_client_df.to_csv(os.path.join(OUTPUT_DIR, "per_client_results.csv"), index=False)
 
     with open(os.path.join(OUTPUT_DIR, "final_global_metrics.txt"), "w", encoding="utf-8") as f:
